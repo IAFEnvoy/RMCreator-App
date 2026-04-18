@@ -1,15 +1,37 @@
-name: Tauri 2 Multi-Platform Build
+name: Tauri 2 Manual Publish
 
 on:
-  push:
-    branches: [master]
-  pull_request:
-    branches: [master]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
+  read-version:
+    name: Read version from source
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Read version from src/js/version.js
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(sed -nE "s/^export const version = ['\"]([^'\"]+)['\"];/\1/p" src/js/version.js)
+          if [ -z "$VERSION" ]; then
+            echo "Unable to parse version from src/js/version.js"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build for ${{ matrix.target }}
+    needs: read-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -35,8 +57,8 @@ jobs:
             artifact-name: linux-x86_64
             output-path: src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/
             dependencies: >
-              libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev
-              libayatana-appindicator3-dev librsvg2-dev patchelf
+              libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev
+              libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
     steps:
       - name: Checkout code
@@ -71,3 +93,27 @@ jobs:
           name: tauri-build-${{ matrix.artifact-name }}
           path: ${{ matrix.output-path }}
           if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [ read-version, build ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: tauri-build-*
+
+      - name: Create Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.read-version.outputs.tag }}
+          name: ${{ needs.read-version.outputs.tag }}
+          generate_release_notes: false
+          draft: false
+          prerelease: false
+          files: |
+            release-assets/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
