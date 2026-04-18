@@ -14,8 +14,10 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - name: Checkout code
+      - name: Checkout code and submodules
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Read version from src/js/version.js
         id: version
@@ -40,36 +42,27 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact-name: windows
-            output-path: |
-              src-tauri/target/x86_64-pc-windows-msvc/release/*.exe
 
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact-name: macos-x86_64
-            output-path: |
-              src-tauri/target/x86_64-apple-darwin/release/RMCreator
-              src-tauri/target/x86_64-apple-darwin/release/rmcreator
 
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact-name: macos-arm64
-            output-path: |
-              src-tauri/target/aarch64-apple-darwin/release/RMCreator
-              src-tauri/target/aarch64-apple-darwin/release/rmcreator
 
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact-name: linux-x86_64
-            output-path: |
-              src-tauri/target/x86_64-unknown-linux-gnu/release/RMCreator
-              src-tauri/target/x86_64-unknown-linux-gnu/release/rmcreator
             dependencies: >
               libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev
               libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
     steps:
-      - name: Checkout code
+      - name: Checkout code and submodules
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -94,11 +87,42 @@ jobs:
       - name: Build Tauri app
         run: npx tauri build --target ${{ matrix.target }}
 
+      - name: Prepare release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN_DIR="src-tauri/target/${{ matrix.target }}/release"
+          mkdir -p release-assets
+
+          if [ -f "$BIN_DIR/RMCreator.exe" ]; then
+            SRC_BIN="$BIN_DIR/RMCreator.exe"
+          elif [ -f "$BIN_DIR/rmcreator.exe" ]; then
+            SRC_BIN="$BIN_DIR/rmcreator.exe"
+          elif [ -f "$BIN_DIR/RMCreator" ]; then
+            SRC_BIN="$BIN_DIR/RMCreator"
+          elif [ -f "$BIN_DIR/rmcreator" ]; then
+            SRC_BIN="$BIN_DIR/rmcreator"
+          else
+            echo "No executable found in $BIN_DIR"
+            ls -la "$BIN_DIR" || true
+            exit 1
+          fi
+
+          BASENAME=$(basename "$SRC_BIN")
+          if [[ "$BASENAME" == *.exe ]]; then
+            DEST="release-assets/RMCreator-${{ matrix.artifact-name }}.exe"
+          else
+            DEST="release-assets/RMCreator-${{ matrix.artifact-name }}"
+          fi
+
+          cp "$SRC_BIN" "$DEST"
+          echo "Prepared asset: $DEST"
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: tauri-build-${{ matrix.artifact-name }}
-          path: ${{ matrix.output-path }}
+          path: release-assets/*
           if-no-files-found: error
 
   release:
@@ -111,6 +135,7 @@ jobs:
         with:
           path: release-assets
           pattern: tauri-build-*
+          merge-multiple: true
 
       - name: Create Release and upload assets
         uses: softprops/action-gh-release@v2
